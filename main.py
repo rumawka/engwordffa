@@ -37,7 +37,7 @@ class EnglishLearningBot:
             self.level_word_bank = json.load(f)
 
         
-    def get_user_data(self, user_id: int) -> Dict:
+      def get_user_data(self, user_id: int) -> Dict:
         """Получить данные пользователя"""
         if user_id not in user_data:
             user_data[user_id] = {
@@ -48,7 +48,7 @@ class EnglishLearningBot:
             }
         return user_data[user_id]
 
-            async def fetch_words_by_level(self, level: str, count: int = 10) -> List[Dict]:
+    async def fetch_words_by_level(self, level: str, count: int = 10) -> List[Dict]:
         """Получение слов из локального JSON-словаря"""
         try:
             word_list = self.level_word_bank.get(level.upper(), [])
@@ -64,10 +64,10 @@ class EnglishLearningBot:
                     'translation': translation
                 })
             return words
-
         except Exception as e:
             logger.error(f"Ошибка загрузки локальных слов: {e}")
             return []
+
 
             async with aiohttp.ClientSession() as session:
                 # Получаем случайные слова
