@@ -36,8 +36,7 @@ class EnglishLearningBot:
         with open("words_cefr.json", "r", encoding="utf-8") as f:
             self.level_word_bank = json.load(f)
 
-        
-      def get_user_data(self, user_id: int) -> Dict:
+    def get_user_data(self, user_id: int) -> Dict:
         """Получить данные пользователя"""
         if user_id not in user_data:
             user_data[user_id] = {
@@ -60,111 +59,14 @@ class EnglishLearningBot:
                 translation = await self.translate_text(word, 'ru')
                 words.append({
                     'word': word,
-                    'definition': "-",  # Можно подключить определение позже
+                    'definition': "-",
                     'translation': translation
                 })
             return words
         except Exception as e:
             logger.error(f"Ошибка загрузки локальных слов: {e}")
-            return []
-
-
-            async with aiohttp.ClientSession() as session:
-                # Получаем случайные слова
-                for _ in range(count * 2):  # Берем больше для фильтрации
-                    try:
-                        url = "https://wordsapiv1.p.rapidapi.com/words/"
-                        async with session.get(
-                            url,
-                            headers=headers,
-                            params={
-                                'random': 'true',
-                                'frequencyMin': params['frequencyMin'],
-                                'frequencyMax': params['frequencyMax']
-                            }
-                        ) as response:
-                            if response.status == 200:
-                                data = await response.json()
-                                word = data.get('word', '').lower()
-                                
-                                if word and len(word) >= 3:
-                                    # Получаем определение слова
-                                    definition = await self.get_word_definition(word, session, headers)
-                                    if definition:
-                                        # Получаем перевод слова
-                                        translation = await self.translate_text(word, 'ru')
-                                        
-                                        words.append({
-                                            'word': word,
-                                            'definition': definition,
-                                            'translation': translation
-                                        })
-                                        
-                                        if len(words) >= count:
-                                            break
-                                            
-                    except Exception as e:
-                        logger.error(f"Ошибка получения слова: {e}")
-                        continue
-                        
-            return words[:count] if words else await self.get_fallback_words(level, count)
-            
-        except Exception as e:
-            logger.error(f"Ошибка API слов: {e}")
             return await self.get_fallback_words(level, count)
-    
-    async def get_word_definition(self, word: str, session: aiohttp.ClientSession, headers: Dict) -> Optional[str]:
-        """Получить определение слова"""
-        try:
-            url = f"https://wordsapiv1.p.rapidapi.com/words/{word}/definitions"
-            async with session.get(url, headers=headers) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    definitions = data.get('definitions', [])
-                    if definitions:
-                        return definitions[0].get('definition', '')
-        except:
-            pass
-        return None
-    
-    async def get_fallback_words(self, level: str, count: int) -> List[Dict]:
-        """Резервные слова если API недоступно"""
-        fallback_words = {
-            'A1': [
-                {'word': 'cat', 'definition': 'a small domesticated carnivorous mammal', 'translation': 'кот'},
-                {'word': 'dog', 'definition': 'a domesticated carnivorous mammal', 'translation': 'собака'},
-                {'word': 'house', 'definition': 'a building for human habitation', 'translation': 'дом'},
-                {'word': 'car', 'definition': 'a road vehicle powered by a motor', 'translation': 'машина'},
-                {'word': 'book', 'definition': 'a written or printed work consisting of pages', 'translation': 'книга'},
-                {'word': 'water', 'definition': 'a colorless, transparent, odorless liquid', 'translation': 'вода'},
-                {'word': 'food', 'definition': 'any nutritious substance that people eat', 'translation': 'еда'},
-                {'word': 'table', 'definition': 'a piece of furniture with a flat top', 'translation': 'стол'},
-                {'word': 'chair', 'definition': 'a separate seat for one person', 'translation': 'стул'},
-                {'word': 'window', 'definition': 'an opening in a wall fitted with glass', 'translation': 'окно'}
-            ],
-            'A2': [
-                {'word': 'beautiful', 'definition': 'pleasing the senses or mind aesthetically', 'translation': 'красивый'},
-                {'word': 'important', 'definition': 'of great significance or value', 'translation': 'важный'},
-                {'word': 'different', 'definition': 'not the same as another', 'translation': 'разный'},
-                {'word': 'interesting', 'definition': 'arousing curiosity or interest', 'translation': 'интересный'},
-                {'word': 'difficult', 'definition': 'needing much effort to accomplish', 'translation': 'сложный'},
-                {'word': 'comfortable', 'definition': 'providing physical ease and relaxation', 'translation': 'удобный'},
-                {'word': 'expensive', 'definition': 'costing a lot of money', 'translation': 'дорогой'},
-                {'word': 'dangerous', 'definition': 'able or likely to cause harm', 'translation': 'опасный'},
-                {'word': 'wonderful', 'definition': 'inspiring delight, pleasure, or admiration', 'translation': 'чудесный'},
-                {'word': 'terrible', 'definition': 'extremely bad or serious', 'translation': 'ужасный'}
-            ]
-        }
-        
-        # Добавляем слова для остальных уровней
-        fallback_words['B1'] = fallback_words['A2']  # Упрощенно
-        fallback_words['B2'] = fallback_words['A2']
-        fallback_words['C1'] = fallback_words['A2']
-        fallback_words['C2'] = fallback_words['A2']
-        
-        words = fallback_words.get(level, fallback_words['A1'])
-        return random.sample(words, min(count, len(words)))
-    
+
     async def translate_text(self, text: str, target_lang: str = 'ru') -> str:
         """Перевод текста через MyMemory Translation API (бесплатный без ключа)"""
         try:
@@ -179,12 +81,32 @@ class EnglishLearningBot:
                     if response.status == 200:
                         data = await response.json()
                         return data['responseData']['translatedText']
-                    else:
-                        logger.error(f"MyMemory API status: {response.status}")
         except Exception as e:
             logger.error(f"MyMemory error: {e}")
 
         return f"Перевод для '{text}' недоступен"
+
+    async def get_fallback_words(self, level: str, count: int) -> List[Dict]:
+        """Резервные слова если API недоступно"""
+        fallback_words = {
+            'A1': [
+                {'word': 'cat', 'definition': 'a small domesticated carnivorous mammal', 'translation': 'кот'},
+                {'word': 'dog', 'definition': 'a domesticated carnivorous mammal', 'translation': 'собака'},
+                {'word': 'house', 'definition': 'a building for human habitation', 'translation': 'дом'},
+                {'word': 'car', 'definition': 'a road vehicle powered by a motor', 'translation': 'машина'},
+                {'word': 'book', 'definition': 'a written or printed work consisting of pages', 'translation': 'книга'},
+                {'word': 'water', 'definition': 'a colorless, transparent, odorless liquid', 'translation': 'вода'},
+                {'word': 'food', 'definition': 'any nutritious substance that people eat', 'translation': 'еда'},
+                {'word': 'table', 'definition': 'a piece of furniture with a flat top', 'translation': 'стол'},
+                {'word': 'chair', 'definition': 'a separate seat for one person', 'translation': 'стул'},
+                {'word': 'window', 'definition': 'an opening in a wall fitted with glass', 'translation': 'окно'}
+            ]
+        }
+
+        for l in ['A2', 'B1', 'B2', 'C1', 'C2']:
+            fallback_words[l] = fallback_words['A1']
+
+        return random.sample(fallback_words.get(level, fallback_words['A1']), min(count, len(fallback_words['A1'])))
 
     def format_words_text(self, words: List[Dict], level: str, title: str = "слова") -> str:
         """Форматирование текста со словами с переводами"""
