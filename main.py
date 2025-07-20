@@ -32,6 +32,10 @@ user_data: Dict[int, Dict] = {}
 class EnglishLearningBot:
     def __init__(self):
         self.moscow_tz = pytz.timezone('Europe/Moscow')
+
+        with open("words_cefr.json", "r", encoding="utf-8") as f:
+            self.level_word_bank = json.load(f)
+
         
     def get_user_data(self, user_id: int) -> Dict:
         """Получить данные пользователя"""
@@ -44,26 +48,27 @@ class EnglishLearningBot:
             }
         return user_data[user_id]
     
-    async def fetch_words_by_level(self, level: str, count: int = 10) -> List[Dict]:
-        """Получение слов с WordsAPI по уровню сложности"""
+        async def fetch_words_by_level(self, level: str, count: int = 10) -> List[Dict]:
+        """Получение слов из локального JSON-словаря"""
         try:
-            headers = {
-                'X-RapidAPI-Key': WORDS_API_KEY,
-                'X-RapidAPI-Host': 'wordsapiv1.p.rapidapi.com'
-            }
-            
-            # Параметры поиска слов по уровням
-            level_params = {
-                'A1': {'frequencyMin': 7, 'frequencyMax': 7, 'letterPattern': '[a-z]{3,6}'},
-                'A2': {'frequencyMin': 6, 'frequencyMax': 7, 'letterPattern': '[a-z]{4,7}'},
-                'B1': {'frequencyMin': 5, 'frequencyMax': 6, 'letterPattern': '[a-z]{5,8}'},
-                'B2': {'frequencyMin': 4, 'frequencyMax': 5, 'letterPattern': '[a-z]{6,9}'},
-                'C1': {'frequencyMin': 3, 'frequencyMax': 4, 'letterPattern': '[a-z]{7,10}'},
-                'C2': {'frequencyMin': 1, 'frequencyMax': 3, 'letterPattern': '[a-z]{8,12}'}
-            }
-            
+            word_list = self.level_word_bank.get(level.upper(), [])
+            random.shuffle(word_list)
+            selected_words = word_list[:count]
+
             words = []
-            params = level_params.get(level, level_params['A1'])
+            for word in selected_words:
+                translation = await self.translate_text(word, 'ru')
+                words.append({
+                    'word': word,
+                    'definition': "–",  # можно позже реализовать определение
+                    'translation': translation
+                })
+            return words
+
+        except Exception as e:
+            logger.error(f"Ошибка загрузки локальных слов: {e}")
+            return []
+
             
             async with aiohttp.ClientSession() as session:
                 # Получаем случайные слова
