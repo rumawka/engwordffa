@@ -87,9 +87,13 @@ class EnglishLearningBot:
                                     # Получаем определение слова
                                     definition = await self.get_word_definition(word, session, headers)
                                     if definition:
+                                        # Получаем перевод слова
+                                        translation = await self.translate_text(word, 'ru')
+                                        
                                         words.append({
                                             'word': word,
-                                            'definition': definition
+                                            'definition': definition,
+                                            'translation': translation
                                         })
                                         
                                         if len(words) >= count:
@@ -123,28 +127,28 @@ class EnglishLearningBot:
         """Резервные слова если API недоступно"""
         fallback_words = {
             'A1': [
-                {'word': 'cat', 'definition': 'a small domesticated carnivorous mammal'},
-                {'word': 'dog', 'definition': 'a domesticated carnivorous mammal'},
-                {'word': 'house', 'definition': 'a building for human habitation'},
-                {'word': 'car', 'definition': 'a road vehicle powered by a motor'},
-                {'word': 'book', 'definition': 'a written or printed work consisting of pages'},
-                {'word': 'water', 'definition': 'a colorless, transparent, odorless liquid'},
-                {'word': 'food', 'definition': 'any nutritious substance that people eat'},
-                {'word': 'table', 'definition': 'a piece of furniture with a flat top'},
-                {'word': 'chair', 'definition': 'a separate seat for one person'},
-                {'word': 'window', 'definition': 'an opening in a wall fitted with glass'}
+                {'word': 'cat', 'definition': 'a small domesticated carnivorous mammal', 'translation': 'кот'},
+                {'word': 'dog', 'definition': 'a domesticated carnivorous mammal', 'translation': 'собака'},
+                {'word': 'house', 'definition': 'a building for human habitation', 'translation': 'дом'},
+                {'word': 'car', 'definition': 'a road vehicle powered by a motor', 'translation': 'машина'},
+                {'word': 'book', 'definition': 'a written or printed work consisting of pages', 'translation': 'книга'},
+                {'word': 'water', 'definition': 'a colorless, transparent, odorless liquid', 'translation': 'вода'},
+                {'word': 'food', 'definition': 'any nutritious substance that people eat', 'translation': 'еда'},
+                {'word': 'table', 'definition': 'a piece of furniture with a flat top', 'translation': 'стол'},
+                {'word': 'chair', 'definition': 'a separate seat for one person', 'translation': 'стул'},
+                {'word': 'window', 'definition': 'an opening in a wall fitted with glass', 'translation': 'окно'}
             ],
             'A2': [
-                {'word': 'beautiful', 'definition': 'pleasing the senses or mind aesthetically'},
-                {'word': 'important', 'definition': 'of great significance or value'},
-                {'word': 'different', 'definition': 'not the same as another'},
-                {'word': 'interesting', 'definition': 'arousing curiosity or interest'},
-                {'word': 'difficult', 'definition': 'needing much effort to accomplish'},
-                {'word': 'comfortable', 'definition': 'providing physical ease and relaxation'},
-                {'word': 'expensive', 'definition': 'costing a lot of money'},
-                {'word': 'dangerous', 'definition': 'able or likely to cause harm'},
-                {'word': 'wonderful', 'definition': 'inspiring delight, pleasure, or admiration'},
-                {'word': 'terrible', 'definition': 'extremely bad or serious'}
+                {'word': 'beautiful', 'definition': 'pleasing the senses or mind aesthetically', 'translation': 'красивый'},
+                {'word': 'important', 'definition': 'of great significance or value', 'translation': 'важный'},
+                {'word': 'different', 'definition': 'not the same as another', 'translation': 'разный'},
+                {'word': 'interesting', 'definition': 'arousing curiosity or interest', 'translation': 'интересный'},
+                {'word': 'difficult', 'definition': 'needing much effort to accomplish', 'translation': 'сложный'},
+                {'word': 'comfortable', 'definition': 'providing physical ease and relaxation', 'translation': 'удобный'},
+                {'word': 'expensive', 'definition': 'costing a lot of money', 'translation': 'дорогой'},
+                {'word': 'dangerous', 'definition': 'able or likely to cause harm', 'translation': 'опасный'},
+                {'word': 'wonderful', 'definition': 'inspiring delight, pleasure, or admiration', 'translation': 'чудесный'},
+                {'word': 'terrible', 'definition': 'extremely bad or serious', 'translation': 'ужасный'}
             ]
         }
         
@@ -179,9 +183,22 @@ class EnglishLearningBot:
         simple_translations = {
             'hello': 'привет', 'cat': 'кот', 'dog': 'собака', 'house': 'дом',
             'car': 'машина', 'book': 'книга', 'water': 'вода', 'food': 'еда',
+            'table': 'стол', 'chair': 'стул', 'window': 'окно', 'beautiful': 'красивый',
+            'important': 'важный', 'different': 'разный', 'interesting': 'интересный',
+            'difficult': 'сложный', 'comfortable': 'удобный', 'expensive': 'дорогой',
+            'dangerous': 'опасный', 'wonderful': 'чудесный', 'terrible': 'ужасный',
             'привет': 'hello', 'кот': 'cat', 'собака': 'dog', 'дом': 'house'
         }
         return simple_translations.get(text.lower(), f"Перевод для '{text}' недоступен")
+
+    def format_words_text(self, words: List[Dict], level: str, title: str = "слова") -> str:
+        """Форматирование текста со словами с переводами"""
+        words_text = f"📚 Ваши {title} ({level}):\n\n"
+        for i, word_info in enumerate(words, 1):
+            translation = word_info.get('translation', 'нет перевода')
+            words_text += f"{i}. **{word_info['word']}** ({translation})\n"
+            words_text += f"   📖 {word_info['definition']}\n\n"
+        return words_text
 
 # Инициализация бота
 bot = EnglishLearningBot()
@@ -207,6 +224,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • C1-C2: Продвинутый
 
 Бот будет отправлять вам слова каждый день в 10:00 по московскому времени!
+Теперь к каждому слову добавляется русский перевод! 🌟
 
 📚 Доступные команды:
 /start - начать работу
@@ -228,6 +246,9 @@ async def handle_level_selection(update: Update, context: ContextTypes.DEFAULT_T
     user_info = bot.get_user_data(user_id)
     user_info['level'] = level
     
+    # Показываем индикатор загрузки
+    await query.edit_message_text("⏳ Загружаю слова с переводами...")
+    
     # Загружаем первые слова
     words = await bot.fetch_words_by_level(level, 5)
     user_info['daily_words'] = words
@@ -241,9 +262,8 @@ async def handle_level_selection(update: Update, context: ContextTypes.DEFAULT_T
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    words_text = f"✅ Уровень {level} установлен!\n\n📚 Ваши слова на сегодня:\n\n"
-    for i, word_info in enumerate(words, 1):
-        words_text += f"{i}. **{word_info['word']}** - {word_info['definition']}\n\n"
+    words_text = f"✅ Уровень {level} установлен!\n\n"
+    words_text += bot.format_words_text(words, level, "слова на сегодня")
     
     await query.edit_message_text(words_text, parse_mode='Markdown', reply_markup=reply_markup)
 
@@ -258,6 +278,9 @@ async def handle_more_words(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user_info['level']:
         await query.edit_message_text("❌ Сначала выберите уровень командой /start")
         return
+    
+    # Показываем индикатор загрузки
+    await query.edit_message_text("⏳ Загружаю новые слова с переводами...")
     
     # Отмечаем текущие слова как изученные
     for word_info in user_info['daily_words']:
@@ -280,10 +303,8 @@ async def handle_more_words(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    words_text = f"🆕 Новые слова ({user_info['level']}):\n\n"
-    for i, word_info in enumerate(new_words, 1):
-        words_text += f"{i}. **{word_info['word']}** - {word_info['definition']}\n\n"
-    
+    words_text = f"🆕 "
+    words_text += bot.format_words_text(new_words, user_info['level'], "новые слова")
     words_text += f"📈 Изучено слов: {len(user_info['learned_words'])}"
     
     await query.edit_message_text(words_text, parse_mode='Markdown', reply_markup=reply_markup)
@@ -324,9 +345,7 @@ async def handle_back_to_words(update: Update, context: ContextTypes.DEFAULT_TYP
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    words_text = f"📚 Ваши текущие слова ({user_info['level']}):\n\n"
-    for i, word_info in enumerate(user_info['daily_words'], 1):
-        words_text += f"{i}. **{word_info['word']}** - {word_info['definition']}\n\n"
+    words_text = bot.format_words_text(user_info['daily_words'], user_info['level'], "текущие слова")
     
     await query.edit_message_text(words_text, parse_mode='Markdown', reply_markup=reply_markup)
 
@@ -379,6 +398,9 @@ async def more_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Сначала выберите уровень командой /start")
         return
     
+    # Показываем индикатор загрузки
+    loading_msg = await update.message.reply_text("⏳ Загружаю новые слова с переводами...")
+    
     # Отмечаем текущие слова как изученные
     for word_info in user_info['daily_words']:
         user_info['learned_words'].add(word_info['word'])
@@ -387,13 +409,11 @@ async def more_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_words = await bot.fetch_words_by_level(user_info['level'], 5)
     user_info['daily_words'] = new_words
     
-    words_text = f"🆕 Новые слова ({user_info['level']}):\n\n"
-    for i, word_info in enumerate(new_words, 1):
-        words_text += f"{i}. **{word_info['word']}** - {word_info['definition']}\n\n"
-    
+    words_text = f"🆕 "
+    words_text += bot.format_words_text(new_words, user_info['level'], "новые слова")
     words_text += f"📈 Изучено слов: {len(user_info['learned_words'])}"
     
-    await update.message.reply_text(words_text, parse_mode='Markdown')
+    await loading_msg.edit_text(words_text, parse_mode='Markdown')
 
 async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Команда /level"""
@@ -421,18 +441,19 @@ async def test_daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("❌ Сначала выберите уровень командой /start")
         return
     
+    # Показываем индикатор загрузки
+    loading_msg = await update.message.reply_text("⏳ Тест загрузки: получаю слова с переводами...")
+    
     # Принудительно загружаем новые слова
     new_words = await bot.fetch_words_by_level(user_info['level'], 5)
     user_info['daily_words'] = new_words
     user_info['last_daily_update'] = datetime.now(bot.moscow_tz).date()
     
-    words_text = f"🧪 ТЕСТ: Ваши слова на сегодня ({user_info['level']}):\n\n"
-    for i, word_info in enumerate(new_words, 1):
-        words_text += f"{i}. **{word_info['word']}** - {word_info['definition']}\n\n"
-    
+    words_text = f"🧪 ТЕСТ: "
+    words_text += bot.format_words_text(new_words, user_info['level'], "ваши слова на сегодня")
     words_text += "Это тест ежедневной отправки! 📚"
     
-    await update.message.reply_text(words_text, parse_mode='Markdown')
+    await loading_msg.edit_text(words_text, parse_mode='Markdown')
 
 async def daily_words_job(context: ContextTypes.DEFAULT_TYPE):
     """Ежедневная отправка слов в 10:00 по Москве"""
@@ -448,10 +469,8 @@ async def daily_words_job(context: ContextTypes.DEFAULT_TYPE):
                     user_info['last_daily_update'] = today
                 
                 # Формируем сообщение
-                words_text = f"🌅 Доброе утро! Ваши слова на сегодня ({user_info['level']}):\n\n"
-                for i, word_info in enumerate(user_info['daily_words'], 1):
-                    words_text += f"{i}. **{word_info['word']}** - {word_info['definition']}\n\n"
-                
+                words_text = f"🌅 Доброе утро! "
+                words_text += bot.format_words_text(user_info['daily_words'], user_info['level'], "ваши слова на сегодня")
                 words_text += "Удачного изучения! 📚"
                 
                 try:
