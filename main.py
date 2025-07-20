@@ -161,7 +161,7 @@ class EnglishLearningBot:
         words = fallback_words.get(level, fallback_words['A1'])
         return random.sample(words, min(count, len(words)))
     
-      	    async def translate_text(self, text: str, target_lang: str = 'ru') -> str:
+    async def translate_text(self, text: str, target_lang: str = 'ru') -> str:
         """Перевод текста через LibreTranslate (бесплатный, без ключа)"""
         try:
             url = "https://libretranslate.com/translate"
@@ -183,7 +183,6 @@ class EnglishLearningBot:
         except Exception as e:
             logger.error(f"Ошибка LibreTranslate: {e}")
 
-        # Резервный перевод
         simple_translations = {
             'hello': 'привет', 'cat': 'кот', 'dog': 'собака', 'house': 'дом',
             'car': 'машина', 'book': 'книга', 'water': 'вода', 'food': 'еда',
@@ -194,6 +193,7 @@ class EnglishLearningBot:
             'привет': 'hello', 'кот': 'cat', 'собака': 'dog', 'дом': 'house'
         }
         return simple_translations.get(text.lower(), f"Перевод для '{text}' недоступен")
+
 
     def format_words_text(self, words: List[Dict], level: str, title: str = "слова") -> str:
         """Форматирование текста со словами с переводами"""
