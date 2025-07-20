@@ -161,35 +161,40 @@ class EnglishLearningBot:
         words = fallback_words.get(level, fallback_words['A1'])
         return random.sample(words, min(count, len(words)))
     
-    async def translate_text(self, text: str, target_lang: str = 'ru') -> str:
-        """Перевод текста через Yandex Translate API"""
-        try:
-            url = "https://translate.yandex.net/api/v1.5/tr.json/translate"
-            params = {
-                'key': TRANSLATE_API_KEY,
-                'text': text,
-                'lang': f'en-{target_lang}' if target_lang == 'ru' else f'ru-en'
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, params=params) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data['text'][0]
-        except Exception as e:
-            logger.error(f"Ошибка перевода: {e}")
-        
-        # Простой резервный перевод для демонстрации
-        simple_translations = {
-            'hello': 'привет', 'cat': 'кот', 'dog': 'собака', 'house': 'дом',
-            'car': 'машина', 'book': 'книга', 'water': 'вода', 'food': 'еда',
-            'table': 'стол', 'chair': 'стул', 'window': 'окно', 'beautiful': 'красивый',
-            'important': 'важный', 'different': 'разный', 'interesting': 'интересный',
-            'difficult': 'сложный', 'comfortable': 'удобный', 'expensive': 'дорогой',
-            'dangerous': 'опасный', 'wonderful': 'чудесный', 'terrible': 'ужасный',
-            'привет': 'hello', 'кот': 'cat', 'собака': 'dog', 'дом': 'house'
+   async def translate_text(self, text: str, target_lang: str = 'ru') -> str:
+    """Перевод текста через LibreTranslate (бесплатный, без ключа)"""
+    try:
+        url = "https://libretranslate.com/translate"
+        headers = {'Content-Type': 'application/json'}
+        payload = {
+            'q': text,
+            'source': 'en' if target_lang == 'ru' else 'ru',
+            'target': target_lang,
+            'format': 'text'
         }
-        return simple_translations.get(text.lower(), f"Перевод для '{text}' недоступен")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, headers=headers, json=payload) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get('translatedText', '')
+                else:
+                    logger.error(f"Ошибка LibreTranslate: статус {response.status}")
+    except Exception as e:
+        logger.error(f"Ошибка LibreTranslate: {e}")
+
+    # Резервный перевод
+    simple_translations = {
+        'hello': 'привет', 'cat': 'кот', 'dog': 'собака', 'house': 'дом',
+        'car': 'машина', 'book': 'книга', 'water': 'вода', 'food': 'еда',
+        'table': 'стол', 'chair': 'стул', 'window': 'окно', 'beautiful': 'красивый',
+        'important': 'важный', 'different': 'разный', 'interesting': 'интересный',
+        'difficult': 'сложный', 'comfortable': 'удобный', 'expensive': 'дорогой',
+        'dangerous': 'опасный', 'wonderful': 'чудесный', 'terrible': 'ужасный',
+        'привет': 'hello', 'кот': 'cat', 'собака': 'dog', 'дом': 'house'
+    }
+    return simple_translations.get(text.lower(), f"Перевод для '{text}' недоступен")
+
 
     def format_words_text(self, words: List[Dict], level: str, title: str = "слова") -> str:
         """Форматирование текста со словами с переводами"""
