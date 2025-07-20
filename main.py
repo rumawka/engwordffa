@@ -182,29 +182,6 @@ class EnglishLearningBot:
 
         return f"Перевод для '{text}' недоступен"
 
-
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, headers=headers, json=payload) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return data.get('translatedText', '')
-                    else:
-                        logger.error(f"Ошибка LibreTranslate: статус {response.status}")
-        except Exception as e:
-            logger.error(f"Ошибка LibreTranslate: {e}")
-
-        simple_translations = {
-            'hello': 'привет', 'cat': 'кот', 'dog': 'собака', 'house': 'дом',
-            'car': 'машина', 'book': 'книга', 'water': 'вода', 'food': 'еда',
-            'table': 'стол', 'chair': 'стул', 'window': 'окно', 'beautiful': 'красивый',
-            'important': 'важный', 'different': 'разный', 'interesting': 'интересный',
-            'difficult': 'сложный', 'comfortable': 'удобный', 'expensive': 'дорогой',
-            'dangerous': 'опасный', 'wonderful': 'чудесный', 'terrible': 'ужасный',
-            'привет': 'hello', 'кот': 'cat', 'собака': 'dog', 'дом': 'house'
-        }
-        return simple_translations.get(text.lower(), f"Перевод для '{text}' недоступен")
-
-
     def format_words_text(self, words: List[Dict], level: str, title: str = "слова") -> str:
         """Форматирование текста со словами с переводами"""
         words_text = f"📚 Ваши {title} ({level}):\n\n"
