@@ -1,554 +1,484 @@
-import os
 import asyncio
 import json
 import logging
+import os
+import random
 from datetime import datetime, time
-import pytz
-import aiohttp
-import sqlite3
-from typing import List, Dict, Optional
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
-import schedule
-import threading
+from typing import Dict, List, Optional
 
-# Настройка логирования
+import aiohttp
+import pytz
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import (
+    Application, CallbackQueryHandler, CommandHandler, ContextTypes,
+    MessageHandler, filters
+)
+
+# Логирование
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# Константы
-BOT_TOKEN = os.getenv('BOT_TOKEN')
-MOSCOW_TZ = pytz.timezone('Europe/Moscow')
+# Конфигурация
+TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+WORDS_API_KEY = os.getenv('WORDS_API_KEY')  # RapidAPI ключ для WordsAPI
+TRANSLATE_API_KEY = os.getenv('TRANSLATE_API_KEY')  # Yandex Translate API ключ
 
-# Уровни сложности
-LEVELS = {
-    'A1': 'beginner',
-    'A2': 'elementary', 
-    'B1': 'intermediate',
-    'B2': 'upper-intermediate',
-    'C1': 'advanced',
-    'C2': 'proficiency'
-}
-
-class DatabaseManager:
-    def __init__(self, db_name="english_bot.db"):
-        self.db_name = db_name
-        self.init_database()
-    
-    def init_database(self):
-        """Инициализация базы данных"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        
-        # Таблица пользователей
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                level TEXT DEFAULT 'A1',
-                daily_words_count INTEGER DEFAULT 5,
-                learned_words TEXT DEFAULT '[]'
-            )
-        ''')
-        
-        # Таблица слов
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS words (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                word TEXT NOT NULL,
-                translation TEXT NOT NULL,
-                level TEXT NOT NULL,
-                definition TEXT,
-                examples TEXT,
-                UNIQUE(word, level)
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
-    
-    def add_user(self, user_id: int, level: str = 'A1'):
-        """Добавление нового пользователя"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT OR IGNORE INTO users (user_id, level)
-            VALUES (?, ?)
-        ''', (user_id, level))
-        conn.commit()
-        conn.close()
-    
-    def update_user_level(self, user_id: int, level: str):
-        """Обновление уровня пользователя"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute('''
-            UPDATE users SET level = ? WHERE user_id = ?
-        ''', (level, user_id))
-        conn.commit()
-        conn.close()
-    
-    def get_user_info(self, user_id: int) -> Dict:
-        """Получение информации о пользователе"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT level, daily_words_count, learned_words
-            FROM users WHERE user_id = ?
-        ''', (user_id,))
-        result = cursor.fetchone()
-        conn.close()
-        
-        if result:
-            return {
-                'level': result[0],
-                'daily_words_count': result[1],
-                'learned_words': json.loads(result[2])
-            }
-        return {'level': 'A1', 'daily_words_count': 5, 'learned_words': []}
-    
-    def add_learned_word(self, user_id: int, word: str):
-        """Добавление изученного слова"""
-        user_info = self.get_user_info(user_id)
-        learned_words = user_info['learned_words']
-        
-        if word not in learned_words:
-            learned_words.append(word)
-            
-            conn = sqlite3.connect(self.db_name)
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE users SET learned_words = ? WHERE user_id = ?
-            ''', (json.dumps(learned_words), user_id))
-            conn.commit()
-            conn.close()
-    
-    def save_words(self, words: List[Dict], level: str):
-        """Сохранение слов в базу данных"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        
-        for word_data in words:
-            cursor.execute('''
-                INSERT OR REPLACE INTO words (word, translation, level, definition, examples)
-                VALUES (?, ?, ?, ?, ?)
-            ''', (
-                word_data['word'],
-                word_data['translation'], 
-                level,
-                word_data.get('definition', ''),
-                json.dumps(word_data.get('examples', []))
-            ))
-        
-        conn.commit()
-        conn.close()
-    
-    def get_words_for_level(self, level: str, exclude_words: List[str] = None, limit: int = 5) -> List[Dict]:
-        """Получение слов для определенного уровня"""
-        conn = sqlite3.connect(self.db_name)
-        cursor = conn.cursor()
-        
-        exclude_condition = ""
-        params = [level]
-        
-        if exclude_words:
-            placeholders = ','.join('?' for _ in exclude_words)
-            exclude_condition = f" AND word NOT IN ({placeholders})"
-            params.extend(exclude_words)
-        
-        params.append(limit)
-        
-        cursor.execute(f'''
-            SELECT word, translation, definition, examples
-            FROM words 
-            WHERE level = ?{exclude_condition}
-            ORDER BY RANDOM()
-            LIMIT ?
-        ''', params)
-        
-        results = cursor.fetchall()
-        conn.close()
-        
-        words = []
-        for row in results:
-            words.append({
-                'word': row[0],
-                'translation': row[1],
-                'definition': row[2],
-                'examples': json.loads(row[3]) if row[3] else []
-            })
-        
-        return words
-
-class WordAPI:
-    def __init__(self):
-        self.session = None
-    
-    async def get_session(self):
-        """Получение HTTP сессии"""
-        if self.session is None:
-            self.session = aiohttp.ClientSession()
-        return self.session
-    
-    async def close_session(self):
-        """Закрытие HTTP сессии"""
-        if self.session:
-            await self.session.close()
-    
-    async def fetch_words_from_api(self, level: str, count: int = 50) -> List[Dict]:
-        """Загрузка слов через API (используем Free Dictionary API)"""
-        # Базовые слова для разных уровней
-        level_words = {
-            'A1': ['hello', 'good', 'water', 'food', 'house', 'family', 'friend', 'work', 'time', 'day'],
-            'A2': ['happy', 'important', 'problem', 'different', 'information', 'business', 'service', 'money', 'school', 'student'],
-            'B1': ['environment', 'experience', 'technology', 'government', 'community', 'opportunity', 'relationship', 'development', 'education', 'management'],
-            'B2': ['sophisticated', 'comprehensive', 'fundamental', 'significant', 'alternative', 'contribute', 'demonstrate', 'establish', 'investigate', 'participate'],
-            'C1': ['contemporary', 'paradigm', 'phenomenon', 'methodology', 'interpretation', 'correlation', 'implementation', 'specifications', 'infrastructure', 'prerequisites'],
-            'C2': ['juxtaposition', 'quintessential', 'ubiquitous', 'perspicacious', 'serendipitous', 'ineffable', 'mellifluous', 'ephemeral', 'sanguine', 'facetious']
-        }
-        
-        words = []
-        base_words = level_words.get(level, level_words['A1'])
-        
-        session = await self.get_session()
-        
-        for word in base_words[:count]:
-            try:
-                # Используем Free Dictionary API
-                url = f"https://api.dictionaryapi.dev/api/v2/entries/en/{word}"
-                async with session.get(url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if data:
-                            word_info = data[0]
-                            meanings = word_info.get('meanings', [])
-                            
-                            if meanings:
-                                definition = meanings[0].get('definitions', [{}])[0].get('definition', '')
-                                
-                                # Простой перевод (можно заменить на более точный API)
-                                translation = await self.get_translation(word)
-                                
-                                words.append({
-                                    'word': word,
-                                    'translation': translation,
-                                    'definition': definition,
-                                    'examples': [meanings[0].get('definitions', [{}])[0].get('example', '')]
-                                })
-                
-                await asyncio.sleep(0.1)  # Пауза между запросами
-                
-            except Exception as e:
-                logger.error(f"Ошибка при получении слова {word}: {e}")
-                # Добавляем базовое слово если API не отвечает
-                words.append({
-                    'word': word,
-                    'translation': 'перевод',  # Базовый перевод
-                    'definition': f'Definition for {word}',
-                    'examples': [f'Example with {word}']
-                })
-        
-        return words
-    
-    async def get_translation(self, word: str, target_lang: str = 'ru') -> str:
-        """Получение перевода слова"""
-        # Простой словарь переводов для демонстрации
-        translations = {
-            'hello': 'привет', 'good': 'хороший', 'water': 'вода', 'food': 'еда',
-            'house': 'дом', 'family': 'семья', 'friend': 'друг', 'work': 'работа',
-            'time': 'время', 'day': 'день', 'happy': 'счастливый', 'important': 'важный',
-            'problem': 'проблема', 'different': 'разный', 'information': 'информация',
-            'business': 'бизнес', 'service': 'сервис', 'money': 'деньги',
-            'school': 'школа', 'student': 'студент'
-        }
-        
-        return translations.get(word.lower(), 'перевод')
+# Хранение данных пользователей в памяти
+user_data: Dict[int, Dict] = {}
 
 class EnglishLearningBot:
-    def __init__(self, token: str):
-        self.application = Application.builder().token(token).build()
-        self.db = DatabaseManager()
-        self.word_api = WordAPI()
-        self.setup_handlers()
-    
-    def setup_handlers(self):
-        """Настройка обработчиков команд"""
-        self.application.add_handler(CommandHandler("start", self.start))
-        self.application.add_handler(CommandHandler("level", self.show_levels))
-        self.application.add_handler(CommandHandler("words", self.get_daily_words))
-        self.application.add_handler(CommandHandler("translate", self.translate_command))
-        self.application.add_handler(CallbackQueryHandler(self.handle_callback))
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.handle_message))
-    
-    async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик команды /start"""
-        user_id = update.effective_user.id
-        self.db.add_user(user_id)
+    def __init__(self):
+        self.moscow_tz = pytz.timezone('Europe/Moscow')
         
-        keyboard = [
-            [InlineKeyboardButton("🎯 Выбрать уровень", callback_data="choose_level")],
-            [InlineKeyboardButton("📚 Получить слова", callback_data="get_words")],
-            [InlineKeyboardButton("🔄 Перевести слово", callback_data="translate")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        welcome_text = """
-🎓 Добро пожаловать в бота для изучения английского языка!
-
-Функции бота:
-📚 Ежедневная отправка слов в 10:00 МСК
-🎯 Выбор уровня от A1 до C2
-🔄 Перевод слов (EN↔RU)
-✅ Отметка изученных слов
-📈 Дополнительные слова при необходимости
-
-Выберите действие:
-        """
-        
-        await update.message.reply_text(welcome_text, reply_markup=reply_markup)
-    
-    async def show_levels(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Показать уровни сложности"""
-        await self.choose_level(update, context, edit=False)
-    
-    async def choose_level(self, update: Update, context: ContextTypes.DEFAULT_TYPE, edit=True):
-        """Выбор уровня сложности"""
-        keyboard = []
-        for level, description in LEVELS.items():
-            keyboard.append([InlineKeyboardButton(f"{level} - {description}", callback_data=f"level_{level}")])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        text = "🎯 Выберите ваш уровень английского языка:"
-        
-        if edit and update.callback_query:
-            await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
-        else:
-            if update.callback_query:
-                await update.callback_query.message.reply_text(text, reply_markup=reply_markup)
-            else:
-                await update.message.reply_text(text, reply_markup=reply_markup)
-    
-    async def get_daily_words(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Получение ежедневных слов"""
-        user_id = update.effective_user.id
-        user_info = self.db.get_user_info(user_id)
-        
-        # Загружаем слова из API если их нет в базе
-        words = self.db.get_words_for_level(user_info['level'], user_info['learned_words'], 5)
-        
-        if len(words) < 3:  # Если слов мало, загружаем новые
-            await self.load_words_for_level(user_info['level'])
-            words = self.db.get_words_for_level(user_info['level'], user_info['learned_words'], 5)
-        
-        if not words:
-            await update.message.reply_text("😔 Не удалось загрузить слова. Попробуйте позже.")
-            return
-        
-        message_text = f"📚 Ваши слова на уровне {user_info['level']}:\n\n"
-        
-        for i, word_data in enumerate(words, 1):
-            message_text += f"{i}. **{word_data['word']}** - {word_data['translation']}\n"
-            if word_data['definition']:
-                message_text += f"   _{word_data['definition']}_\n"
-            if word_data['examples']:
-                message_text += f"   💭 {word_data['examples'][0]}\n"
-            message_text += "\n"
-        
-        keyboard = [
-            [InlineKeyboardButton("✅ Изучил эти слова", callback_data="learned_words")],
-            [InlineKeyboardButton("➕ Дополнительные слова", callback_data="more_words")],
-            [InlineKeyboardButton("🔄 Перевести слово", callback_data="translate")]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        if update.callback_query:
-            await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
-        else:
-            await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
-    
-    async def load_words_for_level(self, level: str):
-        """Загрузка слов для уровня из API"""
-        try:
-            words = await self.word_api.fetch_words_from_api(level, 20)
-            self.db.save_words(words, level)
-            logger.info(f"Загружено {len(words)} слов для уровня {level}")
-        except Exception as e:
-            logger.error(f"Ошибка загрузки слов для уровня {level}: {e}")
-    
-    async def translate_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Команда перевода"""
-        await update.message.reply_text(
-            "🔄 Отправьте слово для перевода:\n"
-            "📝 Английское слово → русский перевод\n" 
-            "📝 Русское слово → английский перевод"
-        )
-    
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработка текстовых сообщений"""
-        text = update.message.text
-        
-        # Проверяем, является ли это словом для перевода
-        if text and len(text.split()) == 1:
-            translation = await self.translate_word(text)
-            await update.message.reply_text(f"🔄 {text} → {translation}")
-        else:
-            await update.message.reply_text(
-                "Отправьте одно слово для перевода или используйте команды:\n"
-                "/words - получить слова для изучения\n"
-                "/level - выбрать уровень\n"
-                "/translate - режим перевода"
-            )
-    
-    async def translate_word(self, word: str) -> str:
-        """Перевод слова"""
-        # Простая проверка языка по символам
-        is_english = all(ord(char) < 128 for char in word if char.isalpha())
-        
-        if is_english:
-            # Переводим с английского на русский
-            translation = await self.word_api.get_translation(word)
-        else:
-            # Переводим с русского на английский (базовый словарь)
-            ru_to_en = {
-                'привет': 'hello', 'хороший': 'good', 'вода': 'water', 
-                'еда': 'food', 'дом': 'house', 'семья': 'family',
-                'друг': 'friend', 'работа': 'work', 'время': 'time'
+    def get_user_data(self, user_id: int) -> Dict:
+        """Получить данные пользователя"""
+        if user_id not in user_data:
+            user_data[user_id] = {
+                'level': None,
+                'learned_words': set(),
+                'daily_words': [],
+                'last_daily_update': None
             }
-            translation = ru_to_en.get(word.lower(), 'translation')
-        
-        return translation
+        return user_data[user_id]
     
-    async def handle_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Обработчик нажатий на кнопки"""
-        query = update.callback_query
-        await query.answer()
-        
-        data = query.data
-        user_id = query.from_user.id
-        
-        if data == "choose_level":
-            await self.choose_level(update, context)
-        
-        elif data.startswith("level_"):
-            level = data.split("_")[1]
-            self.db.update_user_level(user_id, level)
-            await self.load_words_for_level(level)  # Предзагружаем слова
-            await query.edit_message_text(f"✅ Установлен уровень {level}")
-        
-        elif data == "get_words":
-            await self.get_daily_words(update, context)
-        
-        elif data == "learned_words":
-            user_info = self.db.get_user_info(user_id)
-            words = self.db.get_words_for_level(user_info['level'], user_info['learned_words'], 5)
-            
-            for word_data in words:
-                self.db.add_learned_word(user_id, word_data['word'])
-            
-            await query.edit_message_text("✅ Отлично! Слова отмечены как изученные.")
-        
-        elif data == "more_words":
-            await self.get_daily_words(update, context)
-        
-        elif data == "translate":
-            await query.edit_message_text(
-                "🔄 Отправьте слово для перевода:\n"
-                "📝 Английское слово → русский перевод\n"
-                "📝 Русское слово → английский перевод"
-            )
-    
-    async def send_daily_words_to_all(self):
-        """Отправка ежедневных слов всем пользователям"""
+    async def fetch_words_by_level(self, level: str, count: int = 10) -> List[Dict]:
+        """Получение слов с WordsAPI по уровню сложности"""
         try:
-            conn = sqlite3.connect(self.db.db_name)
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id FROM users")
-            users = cursor.fetchall()
-            conn.close()
+            headers = {
+                'X-RapidAPI-Key': WORDS_API_KEY,
+                'X-RapidAPI-Host': 'wordsapiv1.p.rapidapi.com'
+            }
             
-            for (user_id,) in users:
-                try:
-                    user_info = self.db.get_user_info(user_id)
-                    words = self.db.get_words_for_level(user_info['level'], user_info['learned_words'], 5)
-                    
-                    if len(words) < 3:
-                        await self.load_words_for_level(user_info['level'])
-                        words = self.db.get_words_for_level(user_info['level'], user_info['learned_words'], 5)
-                    
-                    if words:
-                        message_text = f"🌅 Доброе утро! Ваши слова на уровне {user_info['level']}:\n\n"
+            # Параметры поиска слов по уровням
+            level_params = {
+                'A1': {'frequencyMin': 7, 'frequencyMax': 7, 'letterPattern': '[a-z]{3,6}'},
+                'A2': {'frequencyMin': 6, 'frequencyMax': 7, 'letterPattern': '[a-z]{4,7}'},
+                'B1': {'frequencyMin': 5, 'frequencyMax': 6, 'letterPattern': '[a-z]{5,8}'},
+                'B2': {'frequencyMin': 4, 'frequencyMax': 5, 'letterPattern': '[a-z]{6,9}'},
+                'C1': {'frequencyMin': 3, 'frequencyMax': 4, 'letterPattern': '[a-z]{7,10}'},
+                'C2': {'frequencyMin': 1, 'frequencyMax': 3, 'letterPattern': '[a-z]{8,12}'}
+            }
+            
+            words = []
+            params = level_params.get(level, level_params['A1'])
+            
+            async with aiohttp.ClientSession() as session:
+                # Получаем случайные слова
+                for _ in range(count * 2):  # Берем больше для фильтрации
+                    try:
+                        url = "https://wordsapiv1.p.rapidapi.com/words/"
+                        async with session.get(
+                            url,
+                            headers=headers,
+                            params={
+                                'random': 'true',
+                                'frequencyMin': params['frequencyMin'],
+                                'frequencyMax': params['frequencyMax']
+                            }
+                        ) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                word = data.get('word', '').lower()
+                                
+                                if word and len(word) >= 3:
+                                    # Получаем определение слова
+                                    definition = await self.get_word_definition(word, session, headers)
+                                    if definition:
+                                        words.append({
+                                            'word': word,
+                                            'definition': definition
+                                        })
+                                        
+                                        if len(words) >= count:
+                                            break
+                                            
+                    except Exception as e:
+                        logger.error(f"Ошибка получения слова: {e}")
+                        continue
                         
-                        for i, word_data in enumerate(words, 1):
-                            message_text += f"{i}. **{word_data['word']}** - {word_data['translation']}\n"
-                            if word_data['definition']:
-                                message_text += f"   _{word_data['definition']}_\n\n"
-                        
-                        keyboard = [
-                            [InlineKeyboardButton("✅ Изучил эти слова", callback_data="learned_words")],
-                            [InlineKeyboardButton("➕ Дополнительные слова", callback_data="more_words")]
-                        ]
-                        reply_markup = InlineKeyboardMarkup(keyboard)
-                        
-                        await self.application.bot.send_message(
-                            chat_id=user_id,
-                            text=message_text,
-                            reply_markup=reply_markup,
-                            parse_mode='Markdown'
-                        )
-                    
-                    await asyncio.sleep(0.1)  # Пауза между отправками
+            return words[:count] if words else await self.get_fallback_words(level, count)
+            
+        except Exception as e:
+            logger.error(f"Ошибка API слов: {e}")
+            return await self.get_fallback_words(level, count)
+    
+    async def get_word_definition(self, word: str, session: aiohttp.ClientSession, headers: Dict) -> Optional[str]:
+        """Получить определение слова"""
+        try:
+            url = f"https://wordsapiv1.p.rapidapi.com/words/{word}/definitions"
+            async with session.get(url, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    definitions = data.get('definitions', [])
+                    if definitions:
+                        return definitions[0].get('definition', '')
+        except:
+            pass
+        return None
+    
+    async def get_fallback_words(self, level: str, count: int) -> List[Dict]:
+        """Резервные слова если API недоступно"""
+        fallback_words = {
+            'A1': [
+                {'word': 'cat', 'definition': 'a small domesticated carnivorous mammal'},
+                {'word': 'dog', 'definition': 'a domesticated carnivorous mammal'},
+                {'word': 'house', 'definition': 'a building for human habitation'},
+                {'word': 'car', 'definition': 'a road vehicle powered by a motor'},
+                {'word': 'book', 'definition': 'a written or printed work consisting of pages'},
+                {'word': 'water', 'definition': 'a colorless, transparent, odorless liquid'},
+                {'word': 'food', 'definition': 'any nutritious substance that people eat'},
+                {'word': 'table', 'definition': 'a piece of furniture with a flat top'},
+                {'word': 'chair', 'definition': 'a separate seat for one person'},
+                {'word': 'window', 'definition': 'an opening in a wall fitted with glass'}
+            ],
+            'A2': [
+                {'word': 'beautiful', 'definition': 'pleasing the senses or mind aesthetically'},
+                {'word': 'important', 'definition': 'of great significance or value'},
+                {'word': 'different', 'definition': 'not the same as another'},
+                {'word': 'interesting', 'definition': 'arousing curiosity or interest'},
+                {'word': 'difficult', 'definition': 'needing much effort to accomplish'},
+                {'word': 'comfortable', 'definition': 'providing physical ease and relaxation'},
+                {'word': 'expensive', 'definition': 'costing a lot of money'},
+                {'word': 'dangerous', 'definition': 'able or likely to cause harm'},
+                {'word': 'wonderful', 'definition': 'inspiring delight, pleasure, or admiration'},
+                {'word': 'terrible', 'definition': 'extremely bad or serious'}
+            ]
+        }
+        
+        # Добавляем слова для остальных уровней
+        fallback_words['B1'] = fallback_words['A2']  # Упрощенно
+        fallback_words['B2'] = fallback_words['A2']
+        fallback_words['C1'] = fallback_words['A2']
+        fallback_words['C2'] = fallback_words['A2']
+        
+        words = fallback_words.get(level, fallback_words['A1'])
+        return random.sample(words, min(count, len(words)))
+    
+    async def translate_text(self, text: str, target_lang: str = 'ru') -> str:
+        """Перевод текста через Yandex Translate API"""
+        try:
+            url = "https://translate.yandex.net/api/v1.5/tr.json/translate"
+            params = {
+                'key': TRANSLATE_API_KEY,
+                'text': text,
+                'lang': f'en-{target_lang}' if target_lang == 'ru' else f'ru-en'
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data['text'][0]
+        except Exception as e:
+            logger.error(f"Ошибка перевода: {e}")
+        
+        # Простой резервный перевод для демонстрации
+        simple_translations = {
+            'hello': 'привет', 'cat': 'кот', 'dog': 'собака', 'house': 'дом',
+            'car': 'машина', 'book': 'книга', 'water': 'вода', 'food': 'еда',
+            'привет': 'hello', 'кот': 'cat', 'собака': 'dog', 'дом': 'house'
+        }
+        return simple_translations.get(text.lower(), f"Перевод для '{text}' недоступен")
+
+# Инициализация бота
+bot = EnglishLearningBot()
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /start"""
+    keyboard = [
+        [InlineKeyboardButton("A1 (Beginner)", callback_data="level_A1")],
+        [InlineKeyboardButton("A2 (Elementary)", callback_data="level_A2")],
+        [InlineKeyboardButton("B1 (Intermediate)", callback_data="level_B1")],
+        [InlineKeyboardButton("B2 (Upper-Intermediate)", callback_data="level_B2")],
+        [InlineKeyboardButton("C1 (Advanced)", callback_data="level_C1")],
+        [InlineKeyboardButton("C2 (Proficiency)", callback_data="level_C2")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    welcome_text = """🎓 Добро пожаловать в English Learning Bot!
+
+Выберите ваш уровень английского языка:
+
+• A1-A2: Начинающий
+• B1-B2: Средний  
+• C1-C2: Продвинутый
+
+Бот будет отправлять вам слова каждый день в 10:00 по московскому времени!
+
+📚 Доступные команды:
+/start - начать работу
+/translate - перевести слово
+/more - получить дополнительные слова
+/level - изменить уровень"""
+
+    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+
+async def handle_level_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка выбора уровня"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    level = query.data.replace("level_", "")
+    
+    user_info = bot.get_user_data(user_id)
+    user_info['level'] = level
+    
+    # Загружаем первые слова
+    words = await bot.fetch_words_by_level(level, 5)
+    user_info['daily_words'] = words
+    user_info['last_daily_update'] = datetime.now(bot.moscow_tz).date()
+    
+    # Создаем клавиатуру для управления
+    keyboard = [
+        [InlineKeyboardButton("🔄 Получить еще слова", callback_data="more_words")],
+        [InlineKeyboardButton("💬 Перевести слово", callback_data="translate_mode")],
+        [InlineKeyboardButton("📊 Изменить уровень", callback_data="change_level")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    words_text = f"✅ Уровень {level} установлен!\n\n📚 Ваши слова на сегодня:\n\n"
+    for i, word_info in enumerate(words, 1):
+        words_text += f"{i}. **{word_info['word']}** - {word_info['definition']}\n\n"
+    
+    await query.edit_message_text(words_text, parse_mode='Markdown', reply_markup=reply_markup)
+
+async def handle_more_words(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Получить дополнительные слова"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    user_info = bot.get_user_data(user_id)
+    
+    if not user_info['level']:
+        await query.edit_message_text("❌ Сначала выберите уровень командой /start")
+        return
+    
+    # Отмечаем текущие слова как изученные
+    for word_info in user_info['daily_words']:
+        user_info['learned_words'].add(word_info['word'])
+    
+    # Загружаем новые слова
+    new_words = await bot.fetch_words_by_level(user_info['level'], 5)
+    # Фильтруем уже изученные слова
+    new_words = [w for w in new_words if w['word'] not in user_info['learned_words']]
+    
+    if not new_words:
+        new_words = await bot.fetch_words_by_level(user_info['level'], 5)
+    
+    user_info['daily_words'] = new_words
+    
+    keyboard = [
+        [InlineKeyboardButton("🔄 Получить еще слова", callback_data="more_words")],
+        [InlineKeyboardButton("💬 Перевести слово", callback_data="translate_mode")],
+        [InlineKeyboardButton("📊 Изменить уровень", callback_data="change_level")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    words_text = f"🆕 Новые слова ({user_info['level']}):\n\n"
+    for i, word_info in enumerate(new_words, 1):
+        words_text += f"{i}. **{word_info['word']}** - {word_info['definition']}\n\n"
+    
+    words_text += f"📈 Изучено слов: {len(user_info['learned_words'])}"
+    
+    await query.edit_message_text(words_text, parse_mode='Markdown', reply_markup=reply_markup)
+
+async def handle_translate_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Режим перевода"""
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("🔙 Назад к словам", callback_data="back_to_words")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "💬 Режим перевода активирован!\n\n"
+        "Напишите слово на английском или русском языке, и я переведу его.\n\n"
+        "Например: cat или кот",
+        reply_markup=reply_markup
+    )
+
+async def handle_back_to_words(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Вернуться к словам"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = query.from_user.id
+    user_info = bot.get_user_data(user_id)
+    
+    if not user_info['daily_words']:
+        await query.edit_message_text("❌ Сначала выберите уровень командой /start")
+        return
+    
+    keyboard = [
+        [InlineKeyboardButton("🔄 Получить еще слова", callback_data="more_words")],
+        [InlineKeyboardButton("💬 Перевести слово", callback_data="translate_mode")],
+        [InlineKeyboardButton("📊 Изменить уровень", callback_data="change_level")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    words_text = f"📚 Ваши текущие слова ({user_info['level']}):\n\n"
+    for i, word_info in enumerate(user_info['daily_words'], 1):
+        words_text += f"{i}. **{word_info['word']}** - {word_info['definition']}\n\n"
+    
+    await query.edit_message_text(words_text, parse_mode='Markdown', reply_markup=reply_markup)
+
+async def handle_change_level(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Изменить уровень"""
+    query = update.callback_query
+    await query.answer()
+    
+    keyboard = [
+        [InlineKeyboardButton("A1 (Beginner)", callback_data="level_A1")],
+        [InlineKeyboardButton("A2 (Elementary)", callback_data="level_A2")],
+        [InlineKeyboardButton("B1 (Intermediate)", callback_data="level_B1")],
+        [InlineKeyboardButton("B2 (Upper-Intermediate)", callback_data="level_B2")],
+        [InlineKeyboardButton("C1 (Advanced)", callback_data="level_C1")],
+        [InlineKeyboardButton("C2 (Proficiency)", callback_data="level_C2")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "📊 Выберите новый уровень английского языка:",
+        reply_markup=reply_markup
+    )
+
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка текстовых сообщений (для перевода)"""
+    text = update.message.text
+    user_id = update.message.from_user.id
+    
+    # Определяем язык и переводим
+    if any(ord(char) > 127 for char in text):  # Содержит кириллицу
+        translation = await bot.translate_text(text, 'en')
+        await update.message.reply_text(f"🔄 **{text}** → {translation}", parse_mode='Markdown')
+    else:  # Английский текст
+        translation = await bot.translate_text(text, 'ru')
+        await update.message.reply_text(f"🔄 **{text}** → {translation}", parse_mode='Markdown')
+
+async def translate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /translate"""
+    await update.message.reply_text(
+        "💬 Напишите слово на английском или русском языке для перевода.\n\n"
+        "Например: cat или кот"
+    )
+
+async def more_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /more"""
+    user_id = update.message.from_user.id
+    user_info = bot.get_user_data(user_id)
+    
+    if not user_info['level']:
+        await update.message.reply_text("❌ Сначала выберите уровень командой /start")
+        return
+    
+    # Отмечаем текущие слова как изученные
+    for word_info in user_info['daily_words']:
+        user_info['learned_words'].add(word_info['word'])
+    
+    # Загружаем новые слова
+    new_words = await bot.fetch_words_by_level(user_info['level'], 5)
+    user_info['daily_words'] = new_words
+    
+    words_text = f"🆕 Новые слова ({user_info['level']}):\n\n"
+    for i, word_info in enumerate(new_words, 1):
+        words_text += f"{i}. **{word_info['word']}** - {word_info['definition']}\n\n"
+    
+    words_text += f"📈 Изучено слов: {len(user_info['learned_words'])}"
+    
+    await update.message.reply_text(words_text, parse_mode='Markdown')
+
+async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /level"""
+    keyboard = [
+        [InlineKeyboardButton("A1 (Beginner)", callback_data="level_A1")],
+        [InlineKeyboardButton("A2 (Elementary)", callback_data="level_A2")],
+        [InlineKeyboardButton("B1 (Intermediate)", callback_data="level_B1")],
+        [InlineKeyboardButton("B2 (Upper-Intermediate)", callback_data="level_B2")],
+        [InlineKeyboardButton("C1 (Advanced)", callback_data="level_C1")],
+        [InlineKeyboardButton("C2 (Proficiency)", callback_data="level_C2")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "📊 Выберите ваш уровень английского языка:",
+        reply_markup=reply_markup
+    )
+
+async def daily_words_job(context: ContextTypes.DEFAULT_TYPE):
+    """Ежедневная отправка слов в 10:00 по Москве"""
+    try:
+        for user_id, user_info in user_data.items():
+            if user_info['level'] and user_info.get('daily_words'):
+                # Проверяем, нужно ли обновить слова на сегодня
+                today = datetime.now(bot.moscow_tz).date()
+                if user_info['last_daily_update'] != today:
+                    # Загружаем новые слова
+                    new_words = await bot.fetch_words_by_level(user_info['level'], 5)
+                    user_info['daily_words'] = new_words
+                    user_info['last_daily_update'] = today
                 
+                # Формируем сообщение
+                words_text = f"🌅 Доброе утро! Ваши слова на сегодня ({user_info['level']}):\n\n"
+                for i, word_info in enumerate(user_info['daily_words'], 1):
+                    words_text += f"{i}. **{word_info['word']}** - {word_info['definition']}\n\n"
+                
+                words_text += "Удачного изучения! 📚"
+                
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=words_text,
+                        parse_mode='Markdown'
+                    )
                 except Exception as e:
                     logger.error(f"Ошибка отправки пользователю {user_id}: {e}")
                     
-        except Exception as e:
-            logger.error(f"Ошибка массовой рассылки: {e}")
-    
-    def schedule_daily_words(self):
-        """Планировщик ежедневных слов"""
-        def run_schedule():
-            schedule.every().day.at("07:00").do(
-                lambda: asyncio.create_task(self.send_daily_words_to_all())
-            )  # 07:00 UTC = 10:00 MSK
-            
-            while True:
-                schedule.run_pending()
-                time.sleep(60)
-        
-        threading.Thread(target=run_schedule, daemon=True).start()
-    
-    async def run(self):
-        """Запуск бота"""
-        # Запускаем планировщик
-        self.schedule_daily_words()
-        
-        # Предзагружаем слова для всех уровней
-        for level in LEVELS.keys():
-            await self.load_words_for_level(level)
-        
-        # Запускаем бота
-        await self.application.initialize()
-        await self.application.start()
-        await self.application.updater.start_polling()
-        
-        logger.info("Бот запущен и готов к работе!")
-        
-        try:
-            await self.application.updater.idle()
-        finally:
-            await self.word_api.close_session()
-            await self.application.stop()
+    except Exception as e:
+        logger.error(f"Ошибка в ежедневной задаче: {e}")
 
-# Главная функция
-async def main():
-    if not BOT_TOKEN:
-        logger.error("BOT_TOKEN не установлен!")
+def main():
+    """Запуск бота"""
+    if not TOKEN:
+        logger.error("TELEGRAM_BOT_TOKEN не установлен!")
         return
     
-    bot = EnglishLearningBot(BOT_TOKEN)
-    await bot.run()
+    # Создание приложения
+    application = Application.builder().token(TOKEN).build()
+    
+    # Регистрация обработчиков
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("translate", translate_command))
+    application.add_handler(CommandHandler("more", more_command))
+    application.add_handler(CommandHandler("level", level_command))
+    
+    # Обработчики callback-кнопок
+    application.add_handler(CallbackQueryHandler(handle_level_selection, pattern="^level_"))
+    application.add_handler(CallbackQueryHandler(handle_more_words, pattern="^more_words$"))
+    application.add_handler(CallbackQueryHandler(handle_translate_mode, pattern="^translate_mode$"))
+    application.add_handler(CallbackQueryHandler(handle_back_to_words, pattern="^back_to_words$"))
+    application.add_handler(CallbackQueryHandler(handle_change_level, pattern="^change_level$"))
+    
+    # Обработчик текстовых сообщений
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+    
+    # Настройка ежедневной задачи (10:00 по Москве)
+    job_queue = application.job_queue
+    job_queue.run_daily(
+        daily_words_job,
+        time=time(hour=7, minute=0),  # 10:00 МСК = 07:00 UTC
+        days=(0, 1, 2, 3, 4, 5, 6)   # Каждый день
+    )
+    
+    # Запуск бота
+    logger.info("Бот запущен!")
+    application.run_polling()
 
-if __name__ == "__main__":
-    asyncio.run(main())
+if __name__ == '__main__':
+    main()
