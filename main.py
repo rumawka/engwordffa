@@ -162,16 +162,26 @@ class EnglishLearningBot:
         return random.sample(words, min(count, len(words)))
     
     async def translate_text(self, text: str, target_lang: str = 'ru') -> str:
-        """Перевод текста через LibreTranslate (бесплатный, без ключа)"""
+        """Перевод текста через MyMemory Translation API (бесплатный без ключа)"""
         try:
-            url = "https://libretranslate.com/translate"
-            headers = {'Content-Type': 'application/json'}
-            payload = {
+            url = "https://api.mymemory.translated.net/get"
+            params = {
                 'q': text,
-                'source': 'en' if target_lang == 'ru' else 'ru',
-                'target': target_lang,
-                'format': 'text'
+                'langpair': f'en|{target_lang}' if target_lang == 'ru' else f'ru|en'
             }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data['responseData']['translatedText']
+                    else:
+                        logger.error(f"MyMemory API status: {response.status}")
+        except Exception as e:
+            logger.error(f"MyMemory error: {e}")
+
+        return f"Перевод для '{text}' недоступен"
+
 
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, headers=headers, json=payload) as response:
