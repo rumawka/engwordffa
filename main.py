@@ -23,8 +23,6 @@ logger = logging.getLogger(__name__)
 
 # Конфигурация
 TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-WORDS_API_KEY = os.getenv('WORDS_API_KEY')  # RapidAPI ключ для WordsAPI
-TRANSLATE_API_KEY = os.getenv('TRANSLATE_API_KEY')  # Yandex Translate API ключ
 
 # Хранение данных пользователей в памяти
 user_data: Dict[int, Dict] = {}
@@ -114,7 +112,6 @@ class EnglishLearningBot:
         for i, word_info in enumerate(words, 1):
             translation = word_info.get('translation', 'нет перевода')
             words_text += f"{i}. **{word_info['word']}** ({translation})\n"
-            words_text += f"   📖 {word_info['definition']}\n\n"
         return words_text
 
 # Инициализация бота
