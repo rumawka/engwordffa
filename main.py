@@ -47,8 +47,8 @@ class EnglishLearningBot:
                 'last_daily_update': None
             }
         return user_data[user_id]
-    
-        async def fetch_words_by_level(self, level: str, count: int = 10) -> List[Dict]:
+
+            async def fetch_words_by_level(self, level: str, count: int = 10) -> List[Dict]:
         """Получение слов из локального JSON-словаря"""
         try:
             word_list = self.level_word_bank.get(level.upper(), [])
@@ -60,7 +60,7 @@ class EnglishLearningBot:
                 translation = await self.translate_text(word, 'ru')
                 words.append({
                     'word': word,
-                    'definition': "–",  # можно позже реализовать определение
+                    'definition': "-",  # Можно подключить определение позже
                     'translation': translation
                 })
             return words
@@ -69,7 +69,6 @@ class EnglishLearningBot:
             logger.error(f"Ошибка загрузки локальных слов: {e}")
             return []
 
-            
             async with aiohttp.ClientSession() as session:
                 # Получаем случайные слова
                 for _ in range(count * 2):  # Берем больше для фильтрации
