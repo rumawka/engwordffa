@@ -212,7 +212,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 /start - начать работу
 /translate - перевести слово
 /more - получить дополнительные слова
-/level - изменить уровень"""
+/level - изменить уровень
+/test_daily - тест ежедневной отправки"""
 
     await update.message.reply_text(welcome_text, reply_markup=reply_markup)
 
@@ -411,6 +412,28 @@ async def level_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
+async def test_daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Команда /test_daily для тестирования ежедневных слов"""
+    user_id = update.message.from_user.id
+    user_info = bot.get_user_data(user_id)
+    
+    if not user_info['level']:
+        await update.message.reply_text("❌ Сначала выберите уровень командой /start")
+        return
+    
+    # Принудительно загружаем новые слова
+    new_words = await bot.fetch_words_by_level(user_info['level'], 5)
+    user_info['daily_words'] = new_words
+    user_info['last_daily_update'] = datetime.now(bot.moscow_tz).date()
+    
+    words_text = f"🧪 ТЕСТ: Ваши слова на сегодня ({user_info['level']}):\n\n"
+    for i, word_info in enumerate(new_words, 1):
+        words_text += f"{i}. **{word_info['word']}** - {word_info['definition']}\n\n"
+    
+    words_text += "Это тест ежедневной отправки! 📚"
+    
+    await update.message.reply_text(words_text, parse_mode='Markdown')
+
 async def daily_words_job(context: ContextTypes.DEFAULT_TYPE):
     """Ежедневная отправка слов в 10:00 по Москве"""
     try:
@@ -449,36 +472,50 @@ def main():
         logger.error("TELEGRAM_BOT_TOKEN не установлен!")
         return
     
-    # Создание приложения
-    application = Application.builder().token(TOKEN).build()
-    
-    # Регистрация обработчиков
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("translate", translate_command))
-    application.add_handler(CommandHandler("more", more_command))
-    application.add_handler(CommandHandler("level", level_command))
-    
-    # Обработчики callback-кнопок
-    application.add_handler(CallbackQueryHandler(handle_level_selection, pattern="^level_"))
-    application.add_handler(CallbackQueryHandler(handle_more_words, pattern="^more_words$"))
-    application.add_handler(CallbackQueryHandler(handle_translate_mode, pattern="^translate_mode$"))
-    application.add_handler(CallbackQueryHandler(handle_back_to_words, pattern="^back_to_words$"))
-    application.add_handler(CallbackQueryHandler(handle_change_level, pattern="^change_level$"))
-    
-    # Обработчик текстовых сообщений
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-    
-    # Настройка ежедневной задачи (10:00 по Москве)
-    job_queue = application.job_queue
-    job_queue.run_daily(
-        daily_words_job,
-        time=time(hour=7, minute=0),  # 10:00 МСК = 07:00 UTC
-        days=(0, 1, 2, 3, 4, 5, 6)   # Каждый день
-    )
-    
-    # Запуск бота
-    logger.info("Бот запущен!")
-    application.run_polling()
+    try:
+        # Создание приложения с JobQueue
+        application = Application.builder().token(TOKEN).build()
+        
+        # Регистрация обработчиков
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CommandHandler("translate", translate_command))
+        application.add_handler(CommandHandler("more", more_command))
+        application.add_handler(CommandHandler("level", level_command))
+        application.add_handler(CommandHandler("test_daily", test_daily_command))
+        
+        # Обработчики callback-кнопок
+        application.add_handler(CallbackQueryHandler(handle_level_selection, pattern="^level_"))
+        application.add_handler(CallbackQueryHandler(handle_more_words, pattern="^more_words$"))
+        application.add_handler(CallbackQueryHandler(handle_translate_mode, pattern="^translate_mode$"))
+        application.add_handler(CallbackQueryHandler(handle_back_to_words, pattern="^back_to_words$"))
+        application.add_handler(CallbackQueryHandler(handle_change_level, pattern="^change_level$"))
+        
+        # Обработчик текстовых сообщений
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+        
+        # Настройка ежедневной задачи (10:00 по Москве)
+        try:
+            job_queue = application.job_queue
+            if job_queue:
+                job_queue.run_daily(
+                    daily_words_job,
+                    time=time(hour=7, minute=0),  # 10:00 МСК = 07:00 UTC
+                    days=(0, 1, 2, 3, 4, 5, 6)   # Каждый день
+                )
+                logger.info("Ежедневная задача настроена на 10:00 МСК")
+            else:
+                logger.warning("JobQueue недоступна - ежедневные уведомления отключены")
+        except Exception as e:
+            logger.error(f"Ошибка настройки JobQueue: {e}")
+            logger.info("Бот продолжит работу без автоматических уведомлений")
+        
+        # Запуск бота
+        logger.info("Бот запущен!")
+        application.run_polling()
+        
+    except Exception as e:
+        logger.error(f"Критическая ошибка при запуске: {e}")
+        raise
 
 if __name__ == '__main__':
     main()
